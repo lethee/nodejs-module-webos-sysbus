@@ -35,6 +35,11 @@ using namespace v8;
 using namespace node;
 using namespace std;
 
+// GPollFD
+//   gint       fd      - file descriptor to poll()
+//   gushort    events  - mask for request
+//   gushort    revents - mask returned from poll()
+
 typedef std::map<int, uv_poll_t *> WatcherMap;
 typedef std::multimap<int, GPollFD *> PollfdMap;
 typedef std::map<int, int> EventMap;
@@ -120,9 +125,22 @@ static void prepare_cb(uv_prepare_t* w, int revents)
     if (!query)
         return;
 
+    // Prepares to poll sources within a main loop.
+    // The resulting information for polling is
+    // determined by calling g_main_context_query()
+    //
+    // 1 - GMainContext
+    // 2 - store priority of highest priority source already ready.
     g_main_context_prepare(ctx->gc, &ctx->maxpri);
 
     // Get all sources from glib main context
+
+    // Determines information necessary to poll this main loop.
+    // 1 - GMainContext
+    // 2 - Maximum priority source to check
+    // 3 - store timeout to be used in polling
+    // 4 - store GPollFD records that need to be polled
+    // 5 - length of fds
     while (ctx->afd < (ctx->nfd = g_main_context_query(
                                       ctx->gc,
                                       ctx->maxpri,
@@ -231,7 +249,7 @@ static void check_cb(uv_check_t* w, int revents)
 
     int ready = g_main_context_check(ctx->gc, ctx->maxpri, ctx->pfd, ctx->nfd);
     if(ready)
-        g_main_context_dispatch(ctx->gc);  
+        g_main_context_dispatch(ctx->gc);
 
     // libuv is too fast for glib, hold on for a while
     query = false;
@@ -245,7 +263,7 @@ static struct econtext default_context;
 void init(Handle<Object> target)
 {
     HandleScope scope;
-    gMainLoop = g_main_loop_new(NULL, true);
+    gMainLoop = g_main_loop_new(NULL, true); // NULL-defaultContext, true-Running
 
     GMainContext *gc = g_main_context_default();
     struct econtext *ctx = &default_context;
@@ -257,11 +275,12 @@ void init(Handle<Object> target)
 
     query = true;
 
-    // Prepare
+    // Prepare - once per loop iteration, right before polling for i/o.
     uv_prepare_init (uv_default_loop(), &ctx->pw);
     uv_prepare_start (&ctx->pw, prepare_cb);
     uv_unref((uv_handle_t*) &ctx->pw);
 
+    // Check - once per loop iteration, right after polling for i/o.
     uv_check_init(uv_default_loop(), &ctx->cw);
     uv_check_start (&ctx->cw, check_cb);
     uv_unref((uv_handle_t*) &ctx->cw);
